@@ -18,15 +18,17 @@
 import argparse
 import logging
 import os
+import re
 import yaml
 
-default_config = os.path.dirname(os.path.abspath(__file__)) + '/../../config/config.yml'
+
 logger = logging.getLogger(__name__)
+
 
 def load_args():
     """Parse command line arguments and return namespace object."""
     p = argparse.ArgumentParser()
-    p.add_argument('-c', '--config', default=default_config, required=False)
+    p.add_argument('-c', '--config', default='../confi/config.yml', required=False)
     return p.parse_args()
 
 
@@ -35,16 +37,38 @@ def load_config(cfg_file):
     with open(cfg_file) as f:
         return yaml.load(f)
 
-def load_env(cfg_obj):
+
+def load_env(cfg_obj, inner=False):
     """Parse cfg_obj for env: strings and load them from process env."""
+
+    e = 0
+
+    # Regex matchers
+    # env_var_id = re.compile('env:[a-z]+?:')
+    bool_false = re.compile('^([Nn0]o?|[Ff]alse)$')
+    bool_true = re.compile('^([yY1](es)?|[Tt]rue)$')
+    # number_regex = re.compile('env:(int|float):')
+
     for key, value in cfg_obj.items():
 
         if isinstance(value, dict):
-            load_env(value)
+            e+=load_env(value, True)
 
         elif isinstance(value, str) and value.startswith('env:'):
 
             try:
+
+                # Handle undefined variables
+                #
+                # This is for documentation purposes, not required on python
+                # as dict() returns KeyError instead of undefined for missing
+                # keys.
+                #
+                # if not os.environ.get(env_var_id.sub('', value)):
+                #     e+=1
+                #     raise KeyError('Configuration missing in process environment: ' +
+                #         env_var_id.sub('', value))
+
                 # String handler
                 if value.startswith('env:str:'):
                     cfg_obj[key] = os.environ[value.lstrip('env:str:')]
@@ -55,9 +79,38 @@ def load_env(cfg_obj):
 
                 # Bool handler
                 elif value.startswith('env:bool:'):
-                    cfg_obj[key] = bool(os.environ[value.lstrip('env:bool:')])
+                    #cfg_obj[key] = bool(os.environ[value.lstrip('env:bool:')])
+                    bool_env = os.environ[value.lstrip('env:bool:')]
 
+                    if bool_false.match(bool_env):
+                        cfg_obj[key] = False
 
+                    elif bool_true.match(bool_env):
+                        cfg_obj[key] = True
+
+                    else:
+                        raise ValueError('Value of environment variable {} is not supported as boolean'.format(bool_env))
+
+                # Int handler
+                elif value.startswith('env:int:'):
+                    cfg_obj[key] = int(os.environ[value.lstrip('env:int:')])
+
+                # Float handler
+                elif value.startswith('env:float:'):
+                    cfg_obj[key] = float(os.environ[value.lstrip('env:float:')])
+
+            # Handle missing variables
             except KeyError:
+                e+=1
                 logger.error('Configuration missing in process environment: ' + value)
+                continue
 
+            except ValueError as e:
+                e+=1
+                logger.error(e)
+                continue
+
+    if inner:
+        return e
+    if e > 0:
+        exit(1)
